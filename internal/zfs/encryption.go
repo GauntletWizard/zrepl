@@ -70,3 +70,38 @@ func ZFSGetEncryptionEnabled(ctx context.Context, fs string) (enabled bool, err 
 		return true, nil
 	}
 }
+
+/*
+returns true if the key is unloaded. This does not matter for raw sends, but keys need to be loaded for live sends.
+
+This mildly short-circuits sends that were about to fail, but the real reason for this is a zfs recieve bug that can corrupt volumes that are sent-to with the dataset unloaded.
+https://github.com/openzfs/zfs/issues/14055
+*/
+func ZFSGetKeyUnloaded(ctx context.Context, fs string) (loaded bool, err error) {
+	defer func(e *error) {
+		if *e != nil {
+			*e = fmt.Errorf("zfs get key loaded fs=%q: %s", fs, *e)
+		}
+	}(&err)
+	if supp, err := EncryptionCLISupported(ctx); err != nil {
+		return false, err
+	} else if !supp {
+		return false, nil
+	}
+
+	props, err := zfsGet(ctx, fs, []string{"keystatus"}, SourceAny)
+	if err != nil {
+		return false, errors.Wrap(err, "cannot get `keystatus` property")
+	}
+	val := props.Get("keystatus")
+	switch val {
+	case "":
+		panic("zfs get should return a value for `keystatus`")
+	case "available":
+		return false, nil
+	case "unavailable":
+		return true, nil
+	default:
+		panic("Unknown key status")
+	}
+}
